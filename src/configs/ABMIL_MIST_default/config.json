@@ -1,0 +1,12 @@
+{
+  "gate": true,
+  "in_dim": 1536,
+  "n_classes": 2,
+  "embed_dim": 512,
+  "attn_dim": 384,
+  "n_fc_layers": 1,
+  "dropout": 0.25,
+  "use_mist": true,
+  "n_prototypes": 16,
+  "mist_rank": 16
+}
