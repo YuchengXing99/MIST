@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
 """
-Multi-GPU BRCA survival sweep.
+Multi-GPU survival experiment sweep.
 
-Iterates over configs × folds × seeds [× n_proto for MIST configs].
-MIST configs expect ST prototype files named {proto_prefix}{N}.npy in --proto-dir.
-Results are written to:
-  <results-dir-root>/k{N}/<model>/seed_<S>/fold_<F>/   (MIST)
-  <results-dir-root>/<model>/seed_<S>/fold_<F>/          (base)
+Supports BRCA, LUAD, LUSC (and custom datasets via CLI overrides).
+Iterates over configs x folds x seeds [x n_proto for MIST configs].
 
 Usage:
-  python scripts/survival/run_brca.py \\
-      --gpus 0 1 2 3 --jobs-per-gpu 1 \\
+  python scripts/survival/run_sweep.py --dataset luad \\
+      --gpus 0 1 2 3 --jobs-per-gpu 2 \\
       --configs abmil abmil_mist \\
-      --n-proto 4 8 16 32 64 \\
-      --proto-dir /path/to/protos \\
-      --data-root /path/to/TCGA-BRCA \\
-      --seeds 1 2 3 4 5 \\
-      --results-dir-root results_survival
+      --data-root /data/TCGA-LUAD --data-root /data/CPTAC-LUAD --data-root /data/NLST \\
+      --seeds 1 2 3 4 5 --results-dir-root results_survival
 
-Dry-run to preview commands without launching:
-  python scripts/survival/run_brca.py --dry-run ...
+Dry-run to preview commands:
+  python scripts/survival/run_sweep.py --dataset luad --dry-run ...
 """
 
 from __future__ import annotations
@@ -34,6 +28,42 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+
+# ---------------------------------------------------------------------------
+# Dataset presets
+# ---------------------------------------------------------------------------
+
+DATASET_PRESETS = {
+    "brca": {
+        "task":        "BRCA_survival",
+        "target_col":  "dss_survival_days",
+        "split_names": "train,test",
+        "split_tpl":   "survival/TCGA_BRCA_overall_survival_k={fold}",
+        "log_subdir":  "brca_survival",
+        "placeholder_roots": ["/path/to/TCGA-BRCA"],
+    },
+    "luad": {
+        "task":        "LUAD_survival",
+        "target_col":  "dss_survival_days",
+        "split_names": "train,test_tcgaluad,test_cptacluad,test_nlstluad",
+        "split_tpl":   "survival/TCGA_LUAD_overall_survival_k={fold}",
+        "log_subdir":  "luad_survival",
+        "placeholder_roots": ["/path/to/TCGA-LUAD", "/path/to/CPTAC-LUAD", "/path/to/NLST"],
+    },
+    "lusc": {
+        "task":        "LUSC_survival",
+        "target_col":  "dss_survival_days",
+        "split_names": "train,test_tcgalusc,test_cptaclusc,test_nlstlusc",
+        "split_tpl":   "survival/TCGA_LUSC_overall_survival_k={fold}",
+        "log_subdir":  "lusc_survival",
+        "placeholder_roots": ["/path/to/TCGA-LUSC", "/path/to/CPTAC-LUSC", "/path/to/NLST"],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Model configs
+# ---------------------------------------------------------------------------
 
 MIST_CONFIGS = {
     "abmil_mist", "transmil_mist", "ilra_mist",
@@ -64,7 +94,7 @@ class Job:
     config:     str
     fold:       int
     seed:       int
-    n_proto:    int | None = None   # None for base (non-MIST) configs
+    n_proto:    int | None = None
     proto_path: str | None = None
 
 
@@ -90,43 +120,59 @@ class GPUSlot(NamedTuple):
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Multi-GPU BRCA survival sweep.",
+        description="Multi-GPU survival experiment sweep.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--gpus", nargs="+", default=["0"],
-                   help="GPU ids to use.")
-    p.add_argument("--jobs-per-gpu", type=int, default=1,
-                   help="Concurrent jobs per GPU.")
-    p.add_argument("--configs", nargs="+", choices=ALL_CONFIGS, default=ALL_CONFIGS,
-                   help="Model configs to run.")
+
+    # Dataset selection
+    p.add_argument("--dataset", choices=list(DATASET_PRESETS.keys()), required=True,
+                   help="Dataset preset (brca / luad / lusc).")
+
+    # GPU / parallelism
+    p.add_argument("--gpus", nargs="+", default=["0"])
+    p.add_argument("--jobs-per-gpu", type=int, default=1)
+
+    # Model selection
+    p.add_argument("--configs", nargs="+", choices=ALL_CONFIGS, default=ALL_CONFIGS)
     p.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
     p.add_argument("--folds", nargs="+", type=int, default=DEFAULT_FOLDS)
 
-    # Prototype settings
-    p.add_argument("--n-proto", nargs="+", type=int, default=DEFAULT_N_PROTO,
-                   help="Prototype counts to sweep (MIST configs only). "
-                        "E.g. --n-proto 4 8 16 32 64.")
-    p.add_argument("--proto-dir", default=None,
-                   help="Directory containing prototype files named "
-                        "{proto-prefix}{N}.npy (e.g. prototypes_k16.npy).")
-    p.add_argument("--proto-prefix", default="prototypes_k",
-                   help="Filename prefix for prototype files inside --proto-dir.")
+    # Prototype settings (MIST only)
+    p.add_argument("--n-proto", nargs="+", type=int, default=DEFAULT_N_PROTO)
+    p.add_argument("--proto-dir", default=None)
+    p.add_argument("--proto-prefix", default="prototypes_k")
 
-    # Data / task
+    # Data / task (override preset if needed)
     p.add_argument("--data-root", dest="data_roots", action="append", default=None,
-                   help="BRCA feature root. Repeat for multiple roots.")
-    p.add_argument("--task",        default="BRCA_survival")
-    p.add_argument("--target-col",  default="dss_survival_days")
-    p.add_argument("--split-names", default="train,test")
+                   help="Feature root dir. Repeat for multiple roots.")
+    p.add_argument("--task", default=None,
+                   help="Override task name from preset.")
+    p.add_argument("--target-col", default=None,
+                   help="Override target column from preset.")
+    p.add_argument("--split-names", default=None,
+                   help="Override split names from preset.")
 
     # Output / logging
     p.add_argument("--results-dir-root", default="results_survival")
-    p.add_argument("--log-dir",    default=None,
-                   help="Directory for per-job log files.")
+    p.add_argument("--log-dir", default=None)
     p.add_argument("--poll-seconds", type=float, default=5.0)
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print commands without launching.")
-    return p.parse_args()
+    p.add_argument("--dry-run", action="store_true")
+
+    args = p.parse_args()
+
+    # Apply dataset preset, allowing CLI overrides
+    preset = DATASET_PRESETS[args.dataset]
+    if args.task is None:
+        args.task = preset["task"]
+    if args.target_col is None:
+        args.target_col = preset["target_col"]
+    if args.split_names is None:
+        args.split_names = preset["split_names"]
+    args.split_tpl = preset["split_tpl"]
+    args.log_subdir = preset["log_subdir"]
+    args.placeholder_roots = preset["placeholder_roots"]
+
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +210,6 @@ def build_jobs(args: argparse.Namespace) -> list[Job]:
 # ---------------------------------------------------------------------------
 
 def job_results_root(job: Job, base: str) -> str:
-    """Results root for this job: base/k{N}/ for MIST, base/ for base models."""
     if job.n_proto is not None:
         return os.path.join(base, f"k{job.n_proto}")
     return base
@@ -175,23 +220,24 @@ def build_command_and_env(
     src_dir: Path,
     args: argparse.Namespace,
 ) -> tuple[list[str], dict[str, str]]:
+    split_dir = args.split_tpl.format(fold=job.fold)
     command = [
         "bash",
-        f"./scripts/survival/{job.config}.sh",
-        "__GPU__",           # replaced at launch time
+        f"./scripts/survival/models/{job.config}.sh",
+        "__GPU__",
         args.task,
         args.target_col,
-        f"survival/TCGA_BRCA_overall_survival_k={job.fold}",
+        split_dir,
         args.split_names,
     ]
-    data_roots = args.data_roots or ["/path/to/TCGA-BRCA"]
+    data_roots = args.data_roots or args.placeholder_roots
     command.extend(data_roots)
 
     env: dict[str, str] = {
-        "SEED_LIST":         str(job.seed),
-        "RESULTS_DIR_ROOT":  job_results_root(job, args.results_dir_root),
-        "OMP_NUM_THREADS":   "1",
-        "MKL_NUM_THREADS":   "1",
+        "SEED_LIST":           str(job.seed),
+        "RESULTS_DIR_ROOT":    job_results_root(job, args.results_dir_root),
+        "OMP_NUM_THREADS":     "1",
+        "MKL_NUM_THREADS":     "1",
         "NUMEXPR_NUM_THREADS": "1",
     }
     if job.proto_path:
@@ -214,7 +260,7 @@ def launch_job(
     log_dir: Path,
 ) -> RunningJob:
     command, extra_env = build_command_and_env(job, src_dir, args)
-    command[2] = slot.gpu      # fill in GPU id
+    command[2] = slot.gpu
 
     suffix = f"__k{job.n_proto}" if job.n_proto is not None else ""
     log_name = f"{job.config}{suffix}__fold{job.fold}__seed{job.seed}__gpu{slot.gpu}.log"
@@ -257,7 +303,7 @@ def main() -> int:
     src_dir = Path(__file__).resolve().parents[2]
     log_dir = (
         Path(args.log_dir).expanduser().resolve() if args.log_dir
-        else src_dir.parent / "logs" / "brca_survival" / time.strftime("%Y%m%d_%H%M%S")
+        else src_dir.parent / "logs" / args.log_subdir / time.strftime("%Y%m%d_%H%M%S")
     )
 
     jobs_list = build_jobs(args)
@@ -270,6 +316,10 @@ def main() -> int:
     running: dict[str, RunningJob] = {}
     failures: list[str] = []
 
+    print(f"Dataset       : {args.dataset}")
+    print(f"Task          : {args.task}")
+    print(f"Target col    : {args.target_col}")
+    print(f"Split names   : {args.split_names}")
     print(f"GPUs          : {' '.join(args.gpus)}  (jobs_per_gpu={args.jobs_per_gpu})")
     print(f"Configs       : {' '.join(args.configs)}")
     print(f"Seeds         : {args.seeds}")
@@ -287,7 +337,6 @@ def main() -> int:
 
     try:
         while jobs or running:
-            # Fill available slots
             while jobs and slots:
                 slot = slots.popleft()
                 job  = jobs.popleft()
@@ -296,7 +345,6 @@ def main() -> int:
                 running[key] = r
                 print(f"[START] gpu={slot.gpu}  {job_label(job)}  log={r.log_path.name}")
 
-            # Reap finished jobs
             done_keys: list[str] = []
             for key, r in running.items():
                 rc = r.proc.poll()
@@ -330,7 +378,7 @@ def main() -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
 
-    print("All BRCA survival jobs finished successfully.")
+    print(f"All {args.dataset.upper()} survival jobs finished successfully.")
     return 0
 
 
