@@ -116,10 +116,11 @@ def train(datasets, args, mode='classification'):
             train_results = train_loop_survival(model, datasets['train'], optimizer, lr_scheduler, loss_fn,
                                                 in_dropout=args.in_dropout, print_every=args.print_every,
                                                 accum_steps=args.accum_steps)
-            val_results, _ = validate_survival(model, datasets['train'], loss_fn, print_every=args.print_every, verbose=False)
-            print(val_results)
-            val_results, _ = validate_survival(model, datasets['test'], loss_fn, print_every=args.print_every, verbose=False)
-            print(val_results)
+            for split_name, split_loader in datasets.items():
+                if split_name == 'train':
+                    continue
+                val_results, _ = validate_survival(model, split_loader, loss_fn, print_every=args.print_every, verbose=False)
+                print(f'[{split_name}]', val_results)
         writer = log_dict_tensorboard(writer, train_results, 'train/', epoch)
 
         ### Validation Loop (Optional)
