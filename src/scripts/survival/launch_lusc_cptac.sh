@@ -10,8 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ========================= EDIT THESE PATHS =========================
-DATA_ROOTS=("/path/to/TCGA-LUSC" "/path/to/CPTAC-LUSC")
-PROTO_DIR="/path/to/prototypes"
+DATA_ROOTS=("/hpc/home/e0950223/MIST_data/survival/TCGA-LUSC" "/hpc/home/e0950223/MIST_data/survival/CPTAC-LUSC")
+PROTO_DIR="/hpc/home/e0950223/MIST_data/mol_vis_by_organ/Lung/prototypes_by_k"
 RESULTS_DIR_ROOT="results_survival_lusc"
 # ====================================================================
 
