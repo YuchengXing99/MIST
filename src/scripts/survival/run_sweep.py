@@ -80,6 +80,20 @@ ALL_CONFIGS = [
     "dsmil", "dsmil_mist",
 ]
 
+# Mapping from sweep config name -> result directory name.
+# Result dir = model_config.lower().replace('_default', '') in main_survival.py.
+# model_config = "{Model}_{suffix}" from MODEL_TUPLE in each shell script.
+CONFIG_TO_RESULT_DIR = {
+    "abmil": "abmil",               "abmil_mist": "abmil_mist",
+    "transmil": "transmil",         "transmil_mist": "transmil_mist",
+    "ilra": "ilra",                 "ilra_mist": "ilra_mist",
+    "meanmil": "meanmil",           "meanmil_mist": "meanmil_mist",
+    "maxmil": "maxmil",             "maxmil_mist": "maxmil_mist",
+    "clam": "clam",                 "clam_mist": "clam_mist",
+    "transformer_mil": "transformermil",  "transformer_mil_mist": "transformermil_mist",
+    "dsmil": "dsmil",               "dsmil_mist": "dsmil_mist",
+}
+
 DEFAULT_SEEDS  = list(range(1, 11))
 DEFAULT_FOLDS  = [0, 1, 2, 3, 4]
 DEFAULT_N_PROTO = [16]
@@ -158,6 +172,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--poll-seconds", type=float, default=5.0)
     p.add_argument("--dry-run", action="store_true")
 
+    # Resume / retry
+    p.add_argument("--skip-existing", action="store_true",
+                   help="Skip jobs whose summary.csv already exists in the results dir.")
+
     args = p.parse_args()
 
     # Apply dataset preset, allowing CLI overrides
@@ -203,6 +221,39 @@ def build_jobs(args: argparse.Namespace) -> list[Job]:
                         n_proto=n, proto_path=proto_path,
                     ))
     return jobs
+
+
+# ---------------------------------------------------------------------------
+# Skip-existing filter
+# ---------------------------------------------------------------------------
+
+def filter_completed_jobs(
+    jobs: list[Job],
+    results_dir_root: str,
+    split_tpl: str,
+    src_dir: Path,
+) -> list[Job]:
+    """Remove jobs whose fold-level summary.csv already exists."""
+    repo_root = src_dir.parent
+    remaining: list[Job] = []
+    skipped = 0
+    for job in jobs:
+        base = results_dir_root
+        if job.n_proto is not None:
+            base = os.path.join(base, f"k{job.n_proto}")
+        if not os.path.isabs(base):
+            base = os.path.join(str(repo_root), base)
+        result_dir_name = CONFIG_TO_RESULT_DIR.get(job.config, job.config)
+        summary_path = os.path.join(
+            base, result_dir_name, f"seed_{job.seed}", f"fold_{job.fold}", "summary.csv"
+        )
+        if os.path.isfile(summary_path):
+            skipped += 1
+        else:
+            remaining.append(job)
+    if skipped:
+        print(f"[skip-existing] Skipped {skipped} completed jobs, {len(remaining)} remaining.")
+    return remaining
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +358,10 @@ def main() -> int:
     )
 
     jobs_list = build_jobs(args)
+    if args.skip_existing:
+        jobs_list = filter_completed_jobs(
+            jobs_list, args.results_dir_root, args.split_tpl, src_dir,
+        )
     jobs: deque[Job] = deque(jobs_list)
     slots: deque[GPUSlot] = deque(
         GPUSlot(gpu=gpu, slot_idx=i)
