@@ -49,6 +49,9 @@ class MolecularStainingTransform(nn.Module):
         proto = self.shared_proj(self.prototypes)                              # (K, D_out)
 
         affinity = torch.sigmoid(torch.einsum('bnd,kd->bnk', x_low, proto))   # (B, N, K)
+        # Ablation support: zero out one prototype for importance analysis
+        if getattr(self, '_ablation_k', None) is not None:
+            affinity[:, :, self._ablation_k] = 0.0
         affinity = affinity / (affinity.sum(dim=-1, keepdim=True) + 1e-8)
 
         low = self.V(x_low)                                                    # (B, N, r)
