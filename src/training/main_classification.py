@@ -305,7 +305,7 @@ if __name__ == "__main__":
         print("{}:  {}".format(key, val))
 
     with open(j_(args.results_dir, 'config.json'), 'w') as f:
-        f.write(json.dumps(vars(args), sort_keys=True, indent=4))
+        f.write(json.dumps(vars(args), indent=4, default=str))
 
     #### train ####
     results = main(args)

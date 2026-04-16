@@ -1,4 +1,5 @@
 import os
+import time
 from os.path import join as j_
 import pdb
 import torch.nn.functional as F
@@ -70,6 +71,32 @@ def train(datasets, args, mode='classification'):
             ST_prototypes = np.load(proto_path)
             m.mist.init_prototypes(ST_prototypes)
             print(f'Initialized ST prototypes from {proto_path}')
+
+    # -------- eval-only: load ckpt, skip training, just validate --------
+    if getattr(args, 'eval_only', False):
+        ckpt_path = getattr(args, 'ckpt_path', None)
+        assert ckpt_path and os.path.isfile(ckpt_path), \
+            f'--eval_only requires a valid --ckpt_path (got {ckpt_path})'
+        print(f'[eval_only] Loading ckpt: {ckpt_path}')
+        state = torch.load(ckpt_path, map_location=device)
+        if isinstance(state, dict) and 'model' in state:
+            state = state['model']
+        model.load_state_dict(state)
+
+        results, dumps = {}, {}
+        eval_splits = [k for k in datasets if k != 'train']
+        for si, k in enumerate(eval_splits, start=1):
+            loader = datasets[k]
+            n = len(loader)
+            print(f'[eval_only] ({si}/{len(eval_splits)}) Split {k.upper()}: {n} slides', flush=True)
+            results[k], dumps[k] = validate_survival(
+                model, loader, loss_fn, print_every=10,
+                dump_results=True, verbose=True,
+            )
+            log_dict_tensorboard(writer, results[k], f'final/{k}_', 0, verbose=True)
+        writer.close()
+        return results, dumps
+    # --------------------------------------------------------------------
 
     print('\nInit optimizer ...', end=' ')
     optimizer = get_optim(model=model, args=args)
@@ -369,7 +396,8 @@ def validate_survival(model, loader,
     meters = {'bag_size': AverageMeter()}
     bag_size_meter = meters['bag_size']
     all_risk_scores, all_censorships, all_event_times = [], [], []
-
+    total_batches = len(loader)
+    t_start = time.time()
 
     for batch_idx, batch in enumerate(loader):
         data = batch['img'].to(device)
@@ -391,10 +419,14 @@ def validate_survival(model, loader,
         all_censorships.append(censorship.cpu().numpy())
         all_event_times.append(event_time.cpu().numpy())
 
-        if verbose and (((batch_idx + 1) % print_every == 0) or (batch_idx == len(loader) - 1)):
+        if verbose and (((batch_idx + 1) % print_every == 0) or (batch_idx == total_batches - 1)):
+            done = batch_idx + 1
+            elapsed = time.time() - t_start
+            rate = done / max(elapsed, 1e-6)
+            eta = (total_batches - done) / max(rate, 1e-6)
             msg = [f"avg_{k}: {meter.avg:.4f}" for k, meter in meters.items()]
-            msg = f"batch {batch_idx}\t" + "\t".join(msg)
-            print(msg)
+            head = f"[{done}/{total_batches}] {rate:.1f} slide/s  ETA {eta:5.1f}s"
+            print(head + "\t" + "\t".join(msg), flush=True)
 
     # End of epoch survival-specific metrics to calculate / log
     all_risk_scores = np.concatenate(all_risk_scores).squeeze(1)

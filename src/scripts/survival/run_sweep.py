@@ -58,6 +58,14 @@ DATASET_PRESETS = {
         "log_subdir":  "lusc_survival",
         "placeholder_roots": ["/path/to/TCGA-LUSC", "/path/to/CPTAC-LUSC", "/path/to/NLST"],
     },
+    "coad": {
+        "task":        "COAD_survival",
+        "target_col":  "dss_survival_days",
+        "split_names": "train,test_tcgacoad,test_cptaccoad",
+        "split_tpl":   "survival/TCGA_COAD_overall_survival_k={fold}",
+        "log_subdir":  "coad_survival",
+        "placeholder_roots": ["/path/to/TCGA-COAD", "/path/to/CPTAC-COAD"],
+    },
 }
 
 
@@ -176,7 +184,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-existing", action="store_true",
                    help="Skip jobs whose summary.csv already exists in the results dir.")
 
+    # Eval-only: reuse existing ckpts (e.g. to run inference on a new test split)
+    p.add_argument("--eval-only", action="store_true",
+                   help="Skip training; load ckpts from --ckpt-dir-root and evaluate on split_names.")
+    p.add_argument("--ckpt-dir-root", default=None,
+                   help="Root dir containing trained ckpts "
+                        "(same layout as --results-dir-root). Required with --eval-only.")
+
     args = p.parse_args()
+
+    if args.eval_only and not args.ckpt_dir_root:
+        p.error("--eval-only requires --ckpt-dir-root")
 
     # Apply dataset preset, allowing CLI overrides
     preset = DATASET_PRESETS[args.dataset]
@@ -266,6 +284,15 @@ def job_results_root(job: Job, base: str) -> str:
     return base
 
 
+def job_ckpt_path(job: Job, ckpt_dir_root: str) -> str:
+    """Mirror of main_survival.py's fold-dir layout, for loading existing ckpts."""
+    base = job_results_root(job, ckpt_dir_root)
+    result_dir_name = CONFIG_TO_RESULT_DIR.get(job.config, job.config)
+    return os.path.join(
+        base, result_dir_name, f"seed_{job.seed}", f"fold_{job.fold}", "s_checkpoint.pth"
+    )
+
+
 def build_command_and_env(
     job: Job,
     src_dir: Path,
@@ -290,11 +317,14 @@ def build_command_and_env(
         "OMP_NUM_THREADS":     "1",
         "MKL_NUM_THREADS":     "1",
         "NUMEXPR_NUM_THREADS": "1",
+        "PYTHONUNBUFFERED":    "1",
     }
     if job.proto_path:
         env["ST_PROTO_PATH"] = job.proto_path
     if job.n_proto is not None:
         env["N_PROTO"] = str(job.n_proto)
+    if args.eval_only:
+        env["CKPT_PATH"] = job_ckpt_path(job, args.ckpt_dir_root)
 
     return command, env
 
@@ -362,6 +392,19 @@ def main() -> int:
         jobs_list = filter_completed_jobs(
             jobs_list, args.results_dir_root, args.split_tpl, src_dir,
         )
+    if args.eval_only:
+        kept: list[Job] = []
+        missing = 0
+        for job in jobs_list:
+            ckpt = job_ckpt_path(job, args.ckpt_dir_root)
+            if os.path.isfile(ckpt):
+                kept.append(job)
+            else:
+                missing += 1
+                print(f"[eval-only] Missing ckpt, skipping: {ckpt}")
+        if missing:
+            print(f"[eval-only] {missing} jobs skipped due to missing ckpts, {len(kept)} remaining.")
+        jobs_list = kept
     jobs: deque[Job] = deque(jobs_list)
     slots: deque[GPUSlot] = deque(
         GPUSlot(gpu=gpu, slot_idx=i)

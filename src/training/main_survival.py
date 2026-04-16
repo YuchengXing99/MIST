@@ -228,6 +228,12 @@ parser.add_argument('--split_names', type=str, default='train,val,test',
 parser.add_argument('--overwrite', action='store_true', default=False,
                     help='overwrite existing results')
 
+# eval-only: load a trained checkpoint and skip training
+parser.add_argument('--eval_only', action='store_true', default=False,
+                    help='skip training; load --ckpt_path and run validate on all non-train splits')
+parser.add_argument('--ckpt_path', type=str, default=None,
+                    help='path to s_checkpoint.pth to load when --eval_only is set')
+
 # logging args ###
 parser.add_argument('--results_dir', default='./results',
                     help='results directory (default: ./results)')

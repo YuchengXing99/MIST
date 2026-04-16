@@ -148,6 +148,12 @@ for seed in "${seed_list[@]}"; do
     if [[ -n "${n_proto}" ]]; then
         cmd+=(--n_proto "${n_proto}")
     fi
+    if [[ -n "${CKPT_PATH:-}" ]]; then
+        if [[ ! -f "${CKPT_PATH}" ]]; then
+            die "CKPT_PATH set but file not found: ${CKPT_PATH}"
+        fi
+        cmd+=(--eval_only --ckpt_path "${CKPT_PATH}")
+    fi
 
     echo "[START] model=${model_config} split=${split_dir} seed=${seed}"
     (
