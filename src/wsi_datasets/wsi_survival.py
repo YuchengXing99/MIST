@@ -119,12 +119,11 @@ class WSISurvivalDataset(Dataset):
         self.feats_df = pd.concat([df_sdir(feats_dir, cols=['fpath', 'fname', self.slide_col]) for feats_dir in self.data_source]).drop(['fname'], axis=1).reset_index(drop=True)
         missing_feats_in_split = series_diff(self.data_df[self.slide_col], self.feats_df[self.slide_col])
 
-        ### Assertion to make sure that there are not any missing slides that were specified in your split csv file
-        try:
-            assert len(missing_feats_in_split) == 0
-        except:
-            print(f"Missing Features in Split:\n{missing_feats_in_split}")
-            sys.exit()
+        ### Drop slides whose features are missing instead of aborting
+        if len(missing_feats_in_split) > 0:
+            n_before = len(self.data_df)
+            self.data_df = self.data_df[~self.data_df[self.slide_col].isin(missing_feats_in_split)].reset_index(drop=True)
+            print(f"WARNING: {len(missing_feats_in_split)} slides missing features — dropped ({n_before} → {len(self.data_df)}):\n{missing_feats_in_split.tolist()}")
 
         ### Assertion to make sure that all slide ids to feature paths have a one-to-one mapping (no duplicated features).
         try:
