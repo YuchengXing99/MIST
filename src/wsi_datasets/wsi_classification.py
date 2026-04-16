@@ -52,8 +52,8 @@ class WSIClassificationDataset(Dataset):
         self.y = None
 
         self.validate_classification_dataset()
-        self.idx2sample_df = pd.DataFrame({'sample_id': self.data_df[sample_col].astype(str).unique()})
         self.set_feat_paths_in_df()
+        self.idx2sample_df = pd.DataFrame({'sample_id': self.data_df[sample_col].astype(str).unique()})
         self.data_df.index = self.data_df[sample_col].astype(str)
         self.data_df.index.name = 'sample_id'
         print(self.data_df.groupby([target_col])[sample_col].count().to_string())
