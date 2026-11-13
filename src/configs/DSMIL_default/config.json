@@ -1,0 +1,6 @@
+{
+  "in_dim": 1536,
+  "n_classes": 2,
+  "embed_dim": 512,
+  "dropout": 0.25
+}

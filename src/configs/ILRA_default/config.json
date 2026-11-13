@@ -1,0 +1,13 @@
+{
+  "num_layers": 2,
+  "in_dim": 1536,
+  "hidden_feat": 512,
+  "num_heads": 8,
+  "n_classes": 2,
+  "topk": 2,
+  "ln": true,
+  "dropout": 0.25,
+  "use_mist": false,
+  "n_prototypes": 16,
+  "mist_rank": 16
+}
